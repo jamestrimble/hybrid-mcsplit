@@ -14,4 +14,4 @@ while read instance; do
     $(grep "Solution" results/$instance-plain.out | awk '{print $3}') \
     $(grep "Solution" results/$instance-b.out | awk '{print $3}') \
     $(grep "Solution" results/$instance-h.out | awk '{print $3}')
-done < <(grep s30 instances.txt) | tee results.txt
+done < instances.txt | tee results.txt
