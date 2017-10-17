@@ -46,6 +46,7 @@ static struct argp_option options[] = {
     {"labelled", 'a', 0, 0, "Use edge and vertex labels"},
     {"vertex-labelled-only", 'x', 0, 0, "Use vertex labels, but not edge labels"},
     {"big-first", 'b', 0, 0, "First try to find an induced subgraph isomorphism, then decrement the target size"},
+    {"hybrid", 'h', 0, 0, "TODO"},
     {"timeout", 't', "timeout", 0, "Specify a timeout (seconds)"},
     { 0 }
 };
@@ -60,6 +61,7 @@ static struct {
     bool edge_labelled;
     bool vertex_labelled;
     bool big_first;
+    bool hybrid;
     Heuristic heuristic;
     char *filename1;
     char *filename2;
@@ -79,6 +81,7 @@ void set_default_arguments() {
     arguments.edge_labelled = false;
     arguments.vertex_labelled = false;
     arguments.big_first = false;
+    arguments.hybrid = false;
     arguments.filename1 = NULL;
     arguments.filename2 = NULL;
     arguments.timeout = 0;
@@ -125,7 +128,14 @@ static error_t parse_opt (int key, char *arg, struct argp_state *state) {
             arguments.vertex_labelled = true;
             break;
         case 'b':
+            if (arguments.hybrid)
+                fail("The -b and -h options can't be used together.");
             arguments.big_first = true;
+            break;
+        case 'h':
+            if (arguments.big_first)
+                fail("The -b and -h options can't be used together.");
+            arguments.hybrid = true;
             break;
         case 't':
             arguments.timeout = std::stoi(arg);
@@ -371,7 +381,8 @@ void remove_bidomain(vector<Bidomain>& domains, int idx) {
 
 void solve(const Graph & g0, const Graph & g1, vector<VtxPair> & incumbent,
         vector<VtxPair> & current, vector<Bidomain> & domains,
-        vector<int> & left, vector<int> & right, unsigned int matching_size_goal)
+        vector<int> & left, vector<int> & right, unsigned int matching_size_goal,
+        int min_acceptable_size)
 {
     if (abort_due_to_timeout)
         return;
@@ -385,10 +396,11 @@ void solve(const Graph & g0, const Graph & g1, vector<VtxPair> & incumbent,
     }
 
     unsigned int bound = current.size() + calc_bound(domains);
-    if (bound <= incumbent.size() || bound < matching_size_goal)
+    if (bound <= incumbent.size() || (arguments.big_first && bound < matching_size_goal)
+            || (arguments.hybrid && int(bound) < min_acceptable_size))
         return;
 
-    if (arguments.big_first && incumbent.size()==matching_size_goal)
+    if ((arguments.big_first || arguments.hybrid) && incumbent.size()==matching_size_goal)
         return;
 
     int bd_idx = select_bidomain(domains, left, current.size());
@@ -413,13 +425,15 @@ void solve(const Graph & g0, const Graph & g1, vector<VtxPair> & incumbent,
         auto new_domains = filter_domains(domains, left, right, g0, g1, v, w,
                 arguments.directed || arguments.edge_labelled);
         current.push_back(VtxPair(v, w));
-        solve(g0, g1, incumbent, current, new_domains, left, right, matching_size_goal);
+        solve(g0, g1, incumbent, current, new_domains, left, right, matching_size_goal,
+                min_acceptable_size);
         current.pop_back();
     }
     bd.right_len++;
     if (bd.left_len == 0)
         remove_bidomain(domains, bd_idx);
-    solve(g0, g1, incumbent, current, domains, left, right, matching_size_goal);
+    solve(g0, g1, incumbent, current, domains, left, right, matching_size_goal,
+            min_acceptable_size);
 }
 
 vector<VtxPair> mcs(const Graph & g0, const Graph & g1) {
@@ -465,14 +479,28 @@ vector<VtxPair> mcs(const Graph & g0, const Graph & g1) {
             auto right_copy = right;
             auto domains_copy = domains;
             vector<VtxPair> current;
-            solve(g0, g1, incumbent, current, domains_copy, left_copy, right_copy, goal);
+            solve(g0, g1, incumbent, current, domains_copy, left_copy, right_copy, goal, -1);
             if (incumbent.size() == goal || abort_due_to_timeout) break;
             if (!arguments.quiet) cout << "Upper bound: " << goal-1 << std::endl;
         }
-
+    } else if (arguments.hybrid) {
+        int step = 2;  // TODO: make this a command-line parameter?
+        for (int k=0; k<g0.n; k+=step) {
+            unsigned int goal = g0.n - k;
+            int min_acceptable_size = int(goal) - step + 1;
+            std::cout << "Goal " << goal << std::endl;
+            auto left_copy = left;
+            auto right_copy = right;
+            auto domains_copy = domains;
+            vector<VtxPair> current;
+            solve(g0, g1, incumbent, current, domains_copy, left_copy, right_copy, goal,
+                    min_acceptable_size);
+            if (int(incumbent.size()) >= min_acceptable_size || abort_due_to_timeout) break;
+            if (!arguments.quiet) cout << "Upper bound: " << goal-1 << std::endl;
+        }
     } else {
         vector<VtxPair> current;
-        solve(g0, g1, incumbent, current, domains, left, right, 1);
+        solve(g0, g1, incumbent, current, domains, left, right, 1, -1);
     }
 
     return incumbent;
